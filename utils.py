@@ -28,12 +28,12 @@ def compute_energy_spectrum(v, time=None):
         spectrum: energy spectrum with shape (k,)
     """
 
-    vx = v[0]
-    vy = v[1]
+    vx = v[:,0]
+    vy = v[:,1]
     size = v.shape[2]
 
-    vx_ft = np.fft.rfftn(vx, axes=(1,2))
-    vy_ft = np.fft.rfftn(vy, axes=(1,2))
+    vx_ft = np.fft.rfftn(vx, axes=(1,2)) / size**2
+    vy_ft = np.fft.rfftn(vy, axes=(1,2)) / size**2
     E_ft = 1/2 * (vx_ft * np.conj(vx_ft) + vy_ft * np.conj(vy_ft))
 
     kx, ky = np.meshgrid(np.fft.fftfreq(size), np.fft.rfftfreq(size), indexing='ij')

@@ -132,6 +132,15 @@ def laplacian(u: GridVariable) -> GridArray:
     result += stencil_sum(u.shift(-1, axis), u.shift(+1, axis)) * scales[axis]
   return result
 
+def biharmonic(u: GridVariable) -> GridArray:
+  """Approximates the biharmonic operator of `u`."""
+  scales = np.square(1 / np.array(u.grid.step, dtype=u.dtype))
+  result = 6 * u.array * np.sum(scales)
+  for axis in range(u.grid.ndim):
+    result -= 4 * stencil_sum(u.shift(-1, axis), u.shift(+1, axis)) * scales[axis]
+    result += stencil_sum(u.shift(-2, axis), u.shift(+2, axis)) * scales[axis]
+  return result
+
 
 def divergence(v: Sequence[GridVariable]) -> GridArray:
   """Approximates the divergence of `v` using backward differences."""

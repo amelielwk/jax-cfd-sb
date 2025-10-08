@@ -36,6 +36,10 @@ def diffuse(c: GridVariable, nu: float) -> GridArray:
   """Returns the rate of change in a concentration `c` due to diffusion."""
   return nu * fd.laplacian(c)
 
+def hyperdiffuse(c: GridVariable, nu: float) -> GridArray:
+  """Returns the rate of change in a concentration `c` due to hyperdiffusion.
+  Currently only supports biharmonic diffusion."""
+  return -nu * fd.biharmonic(c)
 
 def stable_time_step(viscosity: float, grid: grids.Grid) -> float:
   """Calculate a stable time step size for explicit diffusion.
