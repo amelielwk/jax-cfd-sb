@@ -152,7 +152,7 @@ def upwind(
   grid = grids.consistent_grid(c, u)
   return grids.GridVariable(
       array=grids.GridArray(array.data, offset, grid),
-      bc=boundaries.periodic_boundary_conditions(grid.ndim))
+      bc=boundaries.periodic_boundary_conditions(grid.ndim, u.bc.name))
 
 
 def lax_wendroff(
@@ -218,7 +218,7 @@ def lax_wendroff(
   grid = grids.consistent_grid(c, u)
   return grids.GridVariable(
       array=grids.GridArray(array.data, offset, grid),
-      bc=boundaries.periodic_boundary_conditions(grid.ndim))
+      bc=boundaries.periodic_boundary_conditions(grid.ndim, u.bc.name))
 
 
 def safe_div(x, y, default_numerator=1):

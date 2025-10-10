@@ -39,9 +39,19 @@ def compute_energy_spectrum(v, time=None):
     kx, ky = np.meshgrid(np.fft.fftfreq(size), np.fft.rfftfreq(size), indexing='ij')
     k = np.sqrt(kx**2 + ky**2)
 
-    spectrum = np.zeros(size)
-    for i in range(size):
-        mask = (k>=i/size) & (k<(i+1)/size)
-        spectrum[i] = np.sum(E_ft[time][mask])
-
-    return spectrum
+    if time is None:
+        spectrums=np.zeros((v.shape[0], size))
+        for t in range(v.shape[0]):
+            spectrum = np.zeros(size)
+            for i in range(size):
+                mask = (k>=i/size) & (k<(i+1)/size)
+                spectrum[i] = np.sum(E_ft[t][mask])
+            spectrums[t] = spectrum
+        return np.mean(spectrums, axis=0)
+    
+    else:
+        spectrum = np.zeros(size)
+        for i in range(size):
+            mask = (k>=i/size) & (k<(i+1)/size)
+            spectrum[i] = np.sum(E_ft[time][mask])
+        return spectrum

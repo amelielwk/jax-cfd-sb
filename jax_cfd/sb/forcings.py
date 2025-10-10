@@ -127,6 +127,20 @@ def coriolis_forcing(grid, angular_velocity: float, dt: float) -> ForcingFn:
   
   return forcing
 
+def tidal_forcing(grid, angular_velocity: float, shear_rate: float) -> ForcingFn:
+  """Tidal forcing, proportional to position."""
+
+  offsets = grid.cell_faces
+  x = grid.mesh(offsets[0])[0]
+
+  def forcing(v):
+    fx = grids.GridArray(2 * shear_rate * angular_velocity * x, offsets[0], grid)
+    fy = grids.GridArray(jnp.zeros_like(fx.data), offsets[1], grid)
+    f = (fx, fy)
+    return f
+  
+  return forcing
+
 def no_forcing(grid):
   """Zero-valued forcing field for unforced simulations."""
   del grid
@@ -237,6 +251,55 @@ def rotational_turbulence_forcing(
   constant_force = constant_force_fn(grid, constant_magnitude,
                                      constant_wavenumber)
   return sum_forcings(coriolis_force)#linear_force, constant_force)
+
+def shearingbox_turbulence_forcing(
+    grid: grids.Grid,
+    constant_magnitude: float = 0,
+    constant_wavenumber: int = 2,
+    linear_coefficient: float = 0,
+    forcing_type: str = 'kolmogorov',
+    angular_velocity: float = 0,
+    shear_rate: float = 0,
+    dt: float = 0.01,
+) -> ForcingFn:
+  """Returns a forcing function for turbulence in 2D or 3D.
+
+  2D turbulence needs a driving force injecting energy at intermediate
+  length-scales, and a damping force at long length-scales to avoid all energy
+  accumulating in giant vorticies. This can be achieved with
+  `constant_magnitude > 0` and `linear_coefficient < 0`.
+
+  3D turbulence only needs a driving force at the longest length-scale (damping
+  happens at the smallest length-scales due to viscosity and/or numerical
+  dispersion). This can be achieved with `constant_magnitude = 0` and
+  `linear_coefficient > 0`.
+
+  Args:
+    grid: grid on which to simulate.
+    constant_magnitude: magnitude for constant forcing with Taylor-Green
+      vortices.
+    constant_wavenumber: wavenumber for constant forcing with Taylor-Green
+      vortices.
+    linear_coefficient: forcing coefficient proportional to velocity, for
+      either driving or damping based on the sign.
+    forcing_type: String that specifies forcing. This must specify the name of
+      function declared in FORCING_FUNCTIONS (taylor_green, etc.)
+
+  Returns:
+    Forcing function.
+  """
+
+  linear_force = linear_forcing(grid, linear_coefficient)
+  coriolis_force = coriolis_forcing(grid, angular_velocity, dt)
+  tidal_force = tidal_forcing(grid, angular_velocity, shear_rate)
+  constant_force_fn = FORCING_FUNCTIONS.get(forcing_type)
+  if constant_force_fn is None:
+    raise ValueError('Unknown `forcing_type`. '
+                     f'Expected one of {list(FORCING_FUNCTIONS.keys())}; '
+                     f'got {forcing_type}.')
+  constant_force = constant_force_fn(grid, constant_magnitude,
+                                     constant_wavenumber)
+  return sum_forcings(coriolis_force, tidal_force) #linear_force, constant_force)
 
 
 def filtered_forcing(

@@ -34,6 +34,7 @@ class BCType:
   PERIODIC = 'periodic'
   DIRICHLET = 'dirichlet'
   NEUMANN = 'neumann'
+  SHEARINGBOX = 'shearingbox'
 
 
 class Padding:
@@ -41,8 +42,14 @@ class Padding:
   EXTEND = 'extend'
 
 
+class Name:
+  VX = 'vx'
+  VY = 'vy'
+  P = 'p'
+
+
 @dataclasses.dataclass(init=False, frozen=True)
-class ConstantBoundaryConditions(BoundaryConditions):
+class GeneralBoundaryConditions(BoundaryConditions):
   """Boundary conditions for a PDE variable that are constant in space and time.
 
   Example usage:
@@ -59,13 +66,27 @@ class ConstantBoundaryConditions(BoundaryConditions):
   """
   types: Tuple[Tuple[str, str], ...]
   bc_values: Tuple[Tuple[Optional[float], Optional[float]], ...]
+  shear_rate: Optional[float]
+  time: Optional[float]
+  name: str
 
   def __init__(self, types: Sequence[Tuple[str, str]],
-               values: Sequence[Tuple[Optional[float], Optional[float]]]):
+               values: Sequence[Tuple[Optional[float], Optional[float]]],
+               shear_rate: Optional[float],
+               time: Optional[float],
+               name: str):
+    
     types = tuple(types)
     values = tuple(values)
+    shear_rate = shear_rate
+    time = time
+    name = name
+
     object.__setattr__(self, 'types', types)
     object.__setattr__(self, 'bc_values', values)
+    object.__setattr__(self, 'shear_rate', shear_rate)
+    object.__setattr__(self, 'time', time)
+    object.__setattr__(self, 'name', name)
 
   @property
   def constant_values(self) -> Tuple[Tuple[float, float], ...]:
@@ -198,6 +219,49 @@ class ConstantBoundaryConditions(BoundaryConditions):
       pad_kwargs = dict(mode='wrap')
       data = jnp.pad(data, full_padding, **pad_kwargs)
 
+    elif bc_type == BCType.SHEARINGBOX:
+      # for shearingbox boundary
+
+      # store original data
+      original_data = data
+
+      if self.shear_rate is None or self.time is None:
+        raise ValueError('shear_rate and time must be provided for shearingbox boundary conditions.')
+
+      Lx = u.grid.domain[0][1]
+      Ly = u.grid.domain[1][1]
+      dy = u.grid.step[1]
+
+      # calculate shift in y direction in units of grid cells
+      dL = jnp.mod(self.shear_rate * Lx * self.time, Ly)
+      m = jnp.floor(dL/dy).astype(int)
+      eps = dL/dy - m
+
+      # start with periodic padding and apply shift
+      sign = -jnp.sign(width) # 1 for lower bound, -1 for upper bound
+      data = jnp.pad(data, full_padding, mode='wrap')
+      data = jnp.roll(data, sign * m, axis=1)
+
+      # apply sub grid interpolation
+      neighbour = jnp.roll(data, sign, axis=1)  # shift forward by 1 in y
+      data = (1.0 - eps) * data + eps * neighbour
+
+      # reapply original data
+      if width < 0:
+        data = data.at[-width:].set(original_data)
+      elif width > 0:
+          data = data.at[:-width].set(original_data)
+
+      # apply correction to y velocity
+      if self.name == Name.VY:
+        correction = data + sign * self.shear_rate * Lx
+        if width < 0:
+          data = data[-width:]
+          data = correction.at[-width:].set(data)
+        elif width > 0:
+          data = data[:-width]
+          data = correction.at[:-width].set(data)
+        
     elif bc_type == BCType.DIRICHLET:
       if np.isclose(u.offset[axis] % 1, 0.5):  # cell center
         # If only one or 0 value is needed, no mode is necessary.
@@ -530,6 +594,32 @@ class ConstantBoundaryConditions(BoundaryConditions):
   trim = _trim
 
 
+class ConstantBoundaryConditions(GeneralBoundaryConditions):
+  """Boundary conditions for a PDE variable that are constant in space and time.
+
+  Example usage:
+    grid = Grid((10, 10))
+    array = GridArray(np.zeros((10, 10)), offset=(0.5, 0.5), grid)
+    bc = ConstantBoundaryConditions(((BCType.PERIODIC, BCType.PERIODIC),
+                                        (BCType.DIRICHLET, BCType.DIRICHLET)),
+                                        ((0.0, 10.0),(1.0, 0.0)))
+    u = GridVariable(array, bc)
+
+  Attributes:
+    types: `types[i]` is a tuple specifying the lower and upper BC types for
+      dimension `i`.
+  """
+
+  def __init__(self, types: Sequence[Tuple[str, str]], 
+               bc_values: Tuple[Tuple[Optional[float], Optional[float]], ...],
+               name: str):
+    
+    shear_rate = None
+    time = None
+
+    super(ConstantBoundaryConditions, self).__init__(types, bc_values, shear_rate, time, name)
+
+
 class HomogeneousBoundaryConditions(ConstantBoundaryConditions):
   """Boundary conditions for a PDE variable.
 
@@ -545,18 +635,53 @@ class HomogeneousBoundaryConditions(ConstantBoundaryConditions):
       dimension `i`.
   """
 
-  def __init__(self, types: Sequence[Tuple[str, str]]):
+  def __init__(self, types: Sequence[Tuple[str, str]], name: str):
 
     ndim = len(types)
     values = ((0.0, 0.0),) * ndim
-    super(HomogeneousBoundaryConditions, self).__init__(types, values)
+
+    super(HomogeneousBoundaryConditions, self).__init__(types, values, name)
+
+class TimeVaryingBoundaryConditions(GeneralBoundaryConditions):
+  """Boundary conditions for a PDE variable that are constant in space and time.
+
+  Example usage:
+    grid = Grid((10, 10))
+    array = GridArray(np.zeros((10, 10)), offset=(0.5, 0.5), grid)
+    bc = ConstantBoundaryConditions(((BCType.PERIODIC, BCType.PERIODIC),
+                                        (BCType.DIRICHLET, BCType.DIRICHLET)),
+                                        ((0.0, 10.0),(1.0, 0.0)))
+    u = GridVariable(array, bc)
+
+  Attributes:
+    types: `types[i]` is a tuple specifying the lower and upper BC types for
+      dimension `i`.
+  """
+
+  def __init__(self, types: Sequence[Tuple[str, str]],
+               shear_rate: float, time: float,
+               name: str):
+    
+    ndim = len(types)
+    values = ((0.0, 0.0),) * ndim
+
+    super(TimeVaryingBoundaryConditions, self).__init__(types, values, shear_rate, time, name)
 
 
 # Convenience utilities to ease updating of BoundaryConditions implementation
-def periodic_boundary_conditions(ndim: int) -> ConstantBoundaryConditions:
+def periodic_boundary_conditions(ndim: int, name: str) -> ConstantBoundaryConditions:
   """Returns periodic BCs for a variable with `ndim` spatial dimension."""
   return HomogeneousBoundaryConditions(
-      ((BCType.PERIODIC, BCType.PERIODIC),) * ndim)
+      ((BCType.PERIODIC, BCType.PERIODIC),) * ndim, name)
+
+
+def shearingbox_boundary_conditions(ndim: int, shear_rate: float, time: float, name: str) -> TimeVaryingBoundaryConditions:
+  """Returns shearingbox BCs for a variable with `ndim` spatial dimension."""
+  if ndim != 2:
+    raise ValueError('shearingbox BCs are only defined for ndim = 2.')
+  bc_type = ((BCType.SHEARINGBOX, BCType.SHEARINGBOX),
+             (BCType.PERIODIC, BCType.PERIODIC))
+  return TimeVaryingBoundaryConditions(bc_type, shear_rate, time, name)
 
 
 def dirichlet_boundary_conditions(
@@ -732,7 +857,7 @@ def get_pressure_bc_from_velocity(
       pressure_bc_types.append((BCType.PERIODIC, BCType.PERIODIC))
     else:
       pressure_bc_types.append((BCType.NEUMANN, BCType.NEUMANN))
-  return HomogeneousBoundaryConditions(pressure_bc_types)
+  return HomogeneousBoundaryConditions(pressure_bc_types, 'p')
 
 
 def get_advection_flux_bc_from_velocity_and_scalar(
@@ -818,4 +943,4 @@ def get_advection_flux_bc_from_velocity_and_scalar(
               f'Flux boundary condition is not implemented for {u.bc, c.bc}')
       flux_bc_types.append(flux_bc_types_ax)
       flux_bc_values.append(flux_bc_values_ax)
-  return ConstantBoundaryConditions(flux_bc_types, flux_bc_values)
+  return ConstantBoundaryConditions(flux_bc_types, flux_bc_values, u.bc.name)

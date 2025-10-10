@@ -101,12 +101,13 @@ def filtered_velocity_field(
   keys = jax.random.split(rng_key, grid.ndim)
   velocity_components = []
   boundary_conditions = []
-  for k in keys:
-    noise = jax.random.normal(k, grid.shape)
+  field_names = ['vx', 'vy']
+  for i in range(grid.ndim):
+    noise = jax.random.normal(keys[i], grid.shape)
     velocity_components.append(
         filter_utils.filter(spectral_density, noise, grid))
     boundary_conditions.append(
-        boundaries.periodic_boundary_conditions(grid.ndim))
+        boundaries.periodic_boundary_conditions(grid.ndim, field_names[i]))
   velocity = wrap_variables(velocity_components, grid, boundary_conditions)
 
   def project_and_normalize(v: GridVariableVector):
