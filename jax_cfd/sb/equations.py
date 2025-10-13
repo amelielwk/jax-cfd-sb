@@ -93,15 +93,20 @@ def navier_stokes_explicit_terms(
 
   def diffuse_velocity(v, *args):
     return tuple(diffuse(u, *args) for u in v)
+  
+  def zero_term(v):
+    return tuple(grids.GridArray(jnp.zeros_like(u), u.offset, u.grid) for u in v)
 
   convection = _wrap_term_as_vector(convect, name='convection')
   diffusion_ = _wrap_term_as_vector(diffuse_velocity, name='diffusion')
   if forcing is not None:
     forcing = _wrap_term_as_vector(forcing, name='forcing')
+  zero_field = _wrap_term_as_vector(zero_term, name='zero_term')
 
   @tree_math.wrap
   @functools.partial(jax.named_call, name='navier_stokes_momentum')
   def _explicit_terms(v):
+    dv_dt = zero_field(v)
     dv_dt = convection(v)
     if viscosity is not None:
       dv_dt += diffusion_(v, viscosity / density)
@@ -145,9 +150,10 @@ def semi_implicit_navier_stokes(
   # advection/diffusion are staggered in time.
   ode = time_stepping.ExplicitNavierStokesODE(
       explicit_terms,
-      lambda v: pressure_projection(v, pressure_solve)
+      lambda v: v #pressure_projection(v, pressure_solve)
   )
   step_fn = time_stepper(ode, dt)
+
   return step_fn
 
 

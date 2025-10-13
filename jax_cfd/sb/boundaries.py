@@ -71,19 +71,19 @@ class GeneralBoundaryConditions(BoundaryConditions):
   name: str
 
   def __init__(self, types: Sequence[Tuple[str, str]],
-               values: Sequence[Tuple[Optional[float], Optional[float]]],
+               bc_values: Sequence[Tuple[Optional[float], Optional[float]]],
                shear_rate: Optional[float],
                time: Optional[float],
                name: str):
     
     types = tuple(types)
-    values = tuple(values)
+    bc_values = tuple(bc_values)
     shear_rate = shear_rate
     time = time
     name = name
 
     object.__setattr__(self, 'types', types)
-    object.__setattr__(self, 'bc_values', values)
+    object.__setattr__(self, 'bc_values', bc_values)
     object.__setattr__(self, 'shear_rate', shear_rate)
     object.__setattr__(self, 'time', time)
     object.__setattr__(self, 'name', name)
@@ -199,7 +199,7 @@ class GeneralBoundaryConditions(BoundaryConditions):
     full_padding, padding, bc_type = make_padding(width)
     offset = list(u.offset)
     offset[axis] -= padding[0]
-    if bc_type == BCType.PERIODIC:
+    if bc_type == BCType.PERIODIC or bc_type == BCType.SHEARINGBOX:
       need_trimming = 'both'  # need to trim both sides
     elif width >= 0:
       need_trimming = 'right'  # only one side needs to be trimmed
@@ -422,7 +422,7 @@ class GeneralBoundaryConditions(BoundaryConditions):
         negative_trim = -math.ceil(-u.offset[axis])
         # periodic is a special case. Shifted data might still contain all the
         # information.
-        if self.types[axis][0] == BCType.PERIODIC:
+        if self.types[axis][0] == BCType.PERIODIC or self.types[axis][0] == BCType.SHEARINGBOX:
           negative_trim = max(negative_trim, u.grid.shape[axis] - u.shape[axis])
         # for both DIRICHLET and NEUMANN cases the value on grid.domain[0] is
         # a dependent value.
@@ -434,7 +434,7 @@ class GeneralBoundaryConditions(BoundaryConditions):
       if (trim_side == 'right' or trim_side == 'both'):
         # periodic is a special case. Boundary on one side depends on the other
         # side.
-        if self.types[axis][1] == BCType.PERIODIC:
+        if self.types[axis][1] == BCType.PERIODIC or self.types[axis][1] == BCType.SHEARINGBOX:
           positive_trim = max(u.shape[axis] - u.grid.shape[axis], 0)
         else:
           # for other cases, where to trim depends only on the boundary type
@@ -642,6 +642,7 @@ class HomogeneousBoundaryConditions(ConstantBoundaryConditions):
 
     super(HomogeneousBoundaryConditions, self).__init__(types, values, name)
 
+@jax.tree_util.register_pytree_node_class
 class TimeVaryingBoundaryConditions(GeneralBoundaryConditions):
   """Boundary conditions for a PDE variable that are constant in space and time.
 
@@ -667,6 +668,26 @@ class TimeVaryingBoundaryConditions(GeneralBoundaryConditions):
 
     super(TimeVaryingBoundaryConditions, self).__init__(types, values, shear_rate, time, name)
 
+  def tree_flatten(self):
+        # Make time dynamic
+        children = (self.time,)
+        aux = (self.types, self.shear_rate, self.name)
+        return children, aux
+
+  @classmethod
+  def tree_unflatten(cls, aux, children):
+      (time,) = children
+      types, shear_rate, name = aux
+      return cls(types, shear_rate, time, name)
+
+  def update_time(self, dt: float) -> 'TimeVaryingBoundaryConditions':
+    # Change the time attribute (for shearing box simulations)
+    return type(self)(
+            types=self.types,
+            shear_rate=self.shear_rate,
+            time=self.time + dt,
+            name=self.name,
+        )
 
 # Convenience utilities to ease updating of BoundaryConditions implementation
 def periodic_boundary_conditions(ndim: int, name: str) -> ConstantBoundaryConditions:
@@ -855,6 +876,8 @@ def get_pressure_bc_from_velocity(
   for velocity_bc_type in velocity_bc_types:
     if velocity_bc_type == 'periodic':
       pressure_bc_types.append((BCType.PERIODIC, BCType.PERIODIC))
+    #elif velocity_bc_type == 'periodic':
+    #  pressure_bc_types.append((BCType.SHEARINGBOX, BCType.SHEARINGBOX))
     else:
       pressure_bc_types.append((BCType.NEUMANN, BCType.NEUMANN))
   return HomogeneousBoundaryConditions(pressure_bc_types, 'p')
@@ -891,12 +914,15 @@ def get_advection_flux_bc_from_velocity_and_scalar(
   # only no penetration and periodic boundaries are supported.
   flux_bc_types = []
   flux_bc_values = []
-  if not isinstance(u.bc, HomogeneousBoundaryConditions):
-    raise NotImplementedError(
-        f'Flux boundary condition is not implemented for velocity with {u.bc}')
+  #if not isinstance(u.bc, HomogeneousBoundaryConditions):
+  #  raise NotImplementedError(
+  #      f'Flux boundary condition is not implemented for velocity with {u.bc}')
   for axis in range(c.grid.ndim):
     if u.bc.types[axis][0] == 'periodic':
       flux_bc_types.append((BCType.PERIODIC, BCType.PERIODIC))
+      flux_bc_values.append((None, None))
+    elif u.bc.types[axis][0] == 'shearingbox':
+      flux_bc_types.append((BCType.SHEARINGBOX, BCType.SHEARINGBOX))
       flux_bc_values.append((None, None))
     elif flux_direction != axis:
       # This is not technically correct. Flux boundary condition in most cases
@@ -943,4 +969,4 @@ def get_advection_flux_bc_from_velocity_and_scalar(
               f'Flux boundary condition is not implemented for {u.bc, c.bc}')
       flux_bc_types.append(flux_bc_types_ax)
       flux_bc_values.append(flux_bc_values_ax)
-  return ConstantBoundaryConditions(flux_bc_types, flux_bc_values, u.bc.name)
+  return GeneralBoundaryConditions(flux_bc_types, flux_bc_values, u.bc.shear_rate, u.bc.time, u.bc.name)

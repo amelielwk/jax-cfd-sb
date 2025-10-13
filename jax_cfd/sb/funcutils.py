@@ -21,6 +21,8 @@ import jax
 from jax import tree_util
 import jax.numpy as jnp
 
+from jax_cfd.sb import grids
+
 
 # Specifying the full signatures of Callable would get somewhat onerous
 # pylint: disable=g-bare-generic
@@ -32,6 +34,7 @@ import jax.numpy as jnp
 # information about PyTrees and https://github.com/google/jax/issues/3340 for
 # discussion of this issue.
 PyTree = Any
+GridVariable = grids.GridVariable
 
 
 _INITIALIZING = 0
@@ -83,6 +86,20 @@ def repeated(f: Callable, steps: int) -> Callable:
   """Returns a repeatedly applied version of f()."""
   def f_repeated(x_initial):
     g = lambda x, _: (f(x), None)
+    x_final, _ = scan(g, x_initial, xs=None, length=steps)
+    return x_final
+  return f_repeated
+
+def repeated_sb(f: Callable, steps: int, dt:float) -> Callable:
+  """Returns a repeatedly applied version of f()."""
+  def f_repeated(x_initial):
+    def g(x, _):
+      x0bc = x[0].bc.update_time(dt)
+      x1bc = x[1].bc.update_time(dt)
+      x = tuple((GridVariable(x[0].array, x0bc), 
+                GridVariable(x[1].array, x1bc)))
+      x_new = f(x)
+      return x_new, None
     x_final, _ = scan(g, x_initial, xs=None, length=steps)
     return x_final
   return f_repeated

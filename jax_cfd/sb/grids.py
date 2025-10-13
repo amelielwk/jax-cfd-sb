@@ -299,14 +299,15 @@ class GridVariable:
 
   def tree_flatten(self):
     """Returns flattening recipe for GridVariable JAX pytree."""
-    children = (self.array,)
-    aux_data = (self.bc,)
+    children = (self.array, self.bc)
+    aux_data = ()
     return children, aux_data
 
   @classmethod
   def tree_unflatten(cls, aux_data, children):
     """Returns unflattening recipe for GridVariable JAX pytree."""
-    return cls(*children, *aux_data)
+    array, bc = children
+    return cls(array, bc)
 
   @property
   def dtype(self):

@@ -105,9 +105,9 @@ def advect_general(
   Returns:
     The time derivative of `c` due to advection by `v`.
   """
-  if not boundaries.has_all_periodic_boundary_conditions(c):
-    raise NotImplementedError(
-        'Non-periodic boundary conditions are not implemented.')
+  #if not boundaries.has_all_periodic_boundary_conditions(c):
+  #  raise NotImplementedError(
+  #      'Non-periodic boundary conditions are not implemented.')
   target_offsets = grids.control_volume_offsets(c)
   aligned_v = tuple(u_interpolation_fn(u, target_offset, v, dt)
                     for u, target_offset in zip(v, target_offsets))
