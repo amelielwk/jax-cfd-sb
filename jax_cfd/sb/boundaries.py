@@ -680,12 +680,12 @@ class TimeVaryingBoundaryConditions(GeneralBoundaryConditions):
       types, shear_rate, name = aux
       return cls(types, shear_rate, time, name)
 
-  def update_time(self, dt: float) -> 'TimeVaryingBoundaryConditions':
+  def update_time(self, t_new: float) -> 'TimeVaryingBoundaryConditions':
     # Change the time attribute (for shearing box simulations)
     return type(self)(
             types=self.types,
             shear_rate=self.shear_rate,
-            time=self.time + dt,
+            time=t_new,
             name=self.name,
         )
 

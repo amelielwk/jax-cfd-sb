@@ -90,17 +90,18 @@ def repeated(f: Callable, steps: int) -> Callable:
     return x_final
   return f_repeated
 
-def repeated_sb(f: Callable, steps: int, dt:float) -> Callable:
+def repeated_sb(f: Callable, steps: int, dt: float) -> Callable:
   """Returns a repeatedly applied version of f()."""
-  def f_repeated(x_initial):
-    def g(x, _):
-      x0bc = x[0].bc.update_time(dt)
-      x1bc = x[1].bc.update_time(dt)
+  def f_repeated(x_initial, t_current: float):
+    def g(x, i):
+      t_new = t_current + (i+1) * dt
+      x0bc = x[0].bc.update_time(t_new)
+      x1bc = x[1].bc.update_time(t_new)
       x = tuple((GridVariable(x[0].array, x0bc), 
                 GridVariable(x[1].array, x1bc)))
       x_new = f(x)
       return x_new, None
-    x_final, _ = scan(g, x_initial, xs=None, length=steps)
+    x_final, _ = scan(g, x_initial, xs=jnp.arange(steps))#, length=steps)
     return x_final
   return f_repeated
 
@@ -112,6 +113,7 @@ def _identity(x):
 def trajectory(
     step_fn: Callable,
     steps: int,
+    Dt: float,
     post_process: Callable = _identity,
     *,
     start_with_input: bool = False,
@@ -132,12 +134,13 @@ def trajectory(
   """
   # TODO(shoyer): change the default to start_with_input=True, once we're sure
   # it works for training.
-  def step(carry_in, _):
-    carry_out = step_fn(carry_in)
+  def step(carry_in, t):
+    carry_out = step_fn(carry_in, t_current=t)
     frame = post_process(carry_in if start_with_input else carry_out)
     return carry_out, frame
 
   def multistep(values):
-    return scan(step, values, xs=None, length=steps)
+    times = jnp.arange(steps) * Dt
+    return scan(step, values, xs=times,)# length=steps)
 
   return multistep
