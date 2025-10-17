@@ -261,6 +261,7 @@ def shearingbox_turbulence_forcing(
     angular_velocity: float = 0,
     shear_rate: float = 0,
     dt: float = 0.01,
+    forced: bool = True
 ) -> ForcingFn:
   """Returns a forcing function for turbulence in 2D or 3D.
 
@@ -299,7 +300,10 @@ def shearingbox_turbulence_forcing(
                      f'got {forcing_type}.')
   constant_force = constant_force_fn(grid, constant_magnitude,
                                      constant_wavenumber)
-  return sum_forcings(coriolis_force, tidal_force) #linear_force, constant_force)
+  if forced:
+    return sum_forcings(coriolis_force, tidal_force, linear_force, constant_force)
+  else:
+    return sum_forcings(coriolis_force, tidal_force)
 
 
 def filtered_forcing(

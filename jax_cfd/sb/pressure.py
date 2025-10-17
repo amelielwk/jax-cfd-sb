@@ -136,14 +136,15 @@ def solve_fast_diag(
     A solution to the PPE equation.
   """
   del q0  # unused
-  if pressure_bc is None:
-    pressure_bc = boundaries.get_pressure_bc_from_velocity(v)
-  if boundaries.has_all_periodic_boundary_conditions(*v):
-    circulant = True
-  else:
-    circulant = False
-    # only matmul implementation supports non-circulant matrices
-    implementation = 'matmul'
+  #if pressure_bc is None:
+  #  pressure_bc = boundaries.get_pressure_bc_from_velocity(v)
+  #if boundaries.has_all_periodic_boundary_conditions(*v):
+  #  circulant = True
+  #else:
+  #  circulant = False
+  #  # only matmul implementation supports non-circulant matrices
+  #  implementation = 'matmul'
+  circulant = True
   rhs = fd.divergence(v)
   laplacians = array_utils.laplacian_matrix_w_boundaries(
       rhs.grid, rhs.offset, pressure_bc)
@@ -178,21 +179,95 @@ def solve_fast_diag_channel_flow(
   return solve_fast_diag(v, q0, pressure_bc, implementation='matmul')
 
 
+def remap(
+    v: GridVariable,
+    Lx: float,
+    Ly: float,
+    dy: float,
+    shear_rate: float,
+    time: float,):
+  """Remap velocity field to and from shear coordinates."""
+
+  x = v.grid.mesh(v.offset)[0]
+  
+  #delta_y = jnp.sign(shear_rate) * jnp.mod(jnp.abs(shear_rate) * time * Lx, Ly)
+  #shift = delta_y * (x - grid.domain[0][0]) / (Lx/2)
+  shift = jnp.sign(shear_rate) * jnp.mod(jnp.abs(shear_rate) * time * x, Ly)
+  m = jnp.where(shift>=0, jnp.floor(shift/dy).astype(int), jnp.ceil(shift/dy).astype(int))
+  eps = jnp.abs(shift/dy - m)
+
+  def shift_column(col, shifti, mi, ei):
+      col_rolled = jnp.roll(col, mi)
+      direction = jnp.where(shifti>=0, 1, -1)                
+      col_neighbour = jnp.roll(col_rolled, direction)
+      return (1.0 - ei) * col_rolled + ei * col_neighbour
+  
+  v_remapped = jax.vmap(shift_column, in_axes=(0, 0, 0, 0))(v.data, shift, m, eps)
+
+  return v_remapped
+
+remap = jax.jit(remap, static_argnames=("Lx", "Ly", "dy", "shear_rate"))
+
+
 def projection(
     v: GridVariableVector,
     solve: Callable = solve_fast_diag,
 ) -> GridVariableVector:
   """Apply pressure projection to make a velocity field divergence free."""
   grid = grids.consistent_grid(*v)
-  pressure_bc = boundaries.get_pressure_bc_from_velocity(v)
+  velocity_bc = v[0].bc #boundaries.get_pressure_bc_from_velocity(v)
+  if isinstance(velocity_bc, boundaries.TimeVaryingBoundaryConditions):
+    shear_rate = velocity_bc.shear_rate
+    time = velocity_bc.time
+  else:
+    shear_rate = None
+  pressure_bc = boundaries.periodic_boundary_conditions(2, 'p') #boundaries.get_pressure_bc_from_velocity(v)
 
   q0 = grids.GridArray(jnp.zeros(grid.shape), grid.cell_center, grid)
   q0 = pressure_bc.impose_bc(q0)
 
-  q = solve(v, q0, pressure_bc)
-  q = pressure_bc.impose_bc(q)
-  q_grad = fd.forward_difference(q)
-  v_projected = tuple(
-      u.bc.impose_bc(u.array - q_g) for u, q_g in zip(v, q_grad))
+  if shear_rate is not None:
+
+    grid = v[0].grid
+    cell_faces = grid.cell_faces
+    cell_center = grid.cell_center
+    Lx = grid.domain[0][1] - grid.domain[0][0]
+    Ly = grid.domain[1][1] - grid.domain[1][0]
+    dy = grid.step[1]
+
+    x = grid.mesh(cell_faces[1])[0]
+    background_shear = - shear_rate * x
+
+    vx_remapped = remap(v[0], Lx, Ly, dy, shear_rate, time)
+    #vy_perb = grids.GridVariable(grids.GridArray(v[1].data-background_shear, cell_faces[1], grid), v[1].bc)
+    vy_remapped = remap(v[1], Lx, Ly, dy, shear_rate, time)
+    vx_remapped = grids.GridVariable(grids.GridArray(vx_remapped, cell_faces[0], grid), 
+                                     boundaries.periodic_boundary_conditions(2, 'vx'))
+    vy_remapped = grids.GridVariable(grids.GridArray(vy_remapped, cell_faces[1], grid), 
+                                     boundaries.periodic_boundary_conditions(2, 'vy'))
+    v_remapped = tuple([vx_remapped, vy_remapped])
+    q = solve(v_remapped, q0, pressure_bc)
+    q = pressure_bc.impose_bc(q)
+    
+    #vx = remap(v_proj[0], -shear_rate, time, boundaries.shearingbox_boundary_conditions(2, shear_rate, time, 'vx'))
+    #vy = remap(v_proj[1], -shear_rate, time, boundaries.shearingbox_boundary_conditions(2, shear_rate, time, 'vy'))
+
+    #v_proj = tuple([vx, vy])
+
+    q_remapped = remap(q, Lx, Ly, dy, -shear_rate, time)
+    q_remapped = grids.GridVariable(grids.GridArray(q_remapped, cell_center, grid), 
+                                     boundaries.shearingbox_boundary_conditions(2, shear_rate, time, 'p'))
+
+    q_grad = fd.forward_difference(q_remapped) # remap pressure term
+    v_projected = tuple(
+        u.bc.impose_bc(u.array - q_g) for u, q_g in zip(v, q_grad))
+
+  else:
+
+    q = solve(v, q0, pressure_bc)
+    q = pressure_bc.impose_bc(q)
+    q_grad = fd.forward_difference(q)
+    v_projected = tuple(
+        u.bc.impose_bc(u.array - q_g) for u, q_g in zip(v, q_grad))
 
   return v_projected

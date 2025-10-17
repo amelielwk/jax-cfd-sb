@@ -113,6 +113,40 @@ def _identity(x):
 def trajectory(
     step_fn: Callable,
     steps: int,
+    post_process: Callable = _identity,
+    *,
+    start_with_input: bool = False,
+) -> Callable:
+  """Returns a function that accumulates repeated applications of `step_fn`.
+
+  Args:
+    step_fn: function that takes a state and returns state after one time step.
+    steps: number of steps to take when generating the trajectory.
+    post_process: transformation to be applied to each frame of the trajectory.
+    start_with_input: if True, output the trajectory at steps [0, ..., steps-1]
+      instead of steps [1, ..., steps].
+
+  Returns:
+    A function that takes an initial state and returns a tuple consisting of:
+      (1) the final frame of the trajectory _before_ `post_process` is applied.
+      (2) trajectory of length `steps` representing time evolution.
+  """
+  # TODO(shoyer): change the default to start_with_input=True, once we're sure
+  # it works for training.
+  def step(carry_in, _):
+    carry_out = step_fn(carry_in)
+    frame = post_process(carry_in if start_with_input else carry_out)
+    return carry_out, frame
+
+  def multistep(values):
+    return scan(step, values, xs=None, length=steps)
+
+  return multistep
+
+
+def trajectory_sb(
+    step_fn: Callable,
+    steps: int,
     Dt: float,
     post_process: Callable = _identity,
     *,

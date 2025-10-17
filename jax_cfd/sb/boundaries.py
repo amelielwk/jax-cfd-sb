@@ -223,13 +223,13 @@ class GeneralBoundaryConditions(BoundaryConditions):
       # for shearingbox boundary
 
       # store original data
-      original_data = data
+      original_data = jnp.copy(data)
 
       if self.shear_rate is None or self.time is None:
         raise ValueError('shear_rate and time must be provided for shearingbox boundary conditions.')
 
-      Lx = u.grid.domain[0][1]
-      Ly = u.grid.domain[1][1]
+      Lx = u.grid.domain[0][1] - u.grid.domain[0][0]
+      Ly = u.grid.domain[1][1] - u.grid.domain[1][0]
       dy = u.grid.step[1]
 
       # calculate shift in y direction in units of grid cells
@@ -251,6 +251,8 @@ class GeneralBoundaryConditions(BoundaryConditions):
         data = data.at[-width:].set(original_data)
       elif width > 0:
           data = data.at[:-width].set(original_data)
+      else:
+          data = original_data
 
       # apply correction to y velocity
       if self.name == Name.VY:
@@ -261,6 +263,8 @@ class GeneralBoundaryConditions(BoundaryConditions):
         elif width > 0:
           data = data[:-width]
           data = correction.at[:-width].set(data)
+        else:
+          data = original_data
         
     elif bc_type == BCType.DIRICHLET:
       if np.isclose(u.offset[axis] % 1, 0.5):  # cell center
@@ -620,6 +624,7 @@ class ConstantBoundaryConditions(GeneralBoundaryConditions):
     super(ConstantBoundaryConditions, self).__init__(types, bc_values, shear_rate, time, name)
 
 
+@jax.tree_util.register_pytree_node_class
 class HomogeneousBoundaryConditions(ConstantBoundaryConditions):
   """Boundary conditions for a PDE variable.
 
@@ -641,6 +646,18 @@ class HomogeneousBoundaryConditions(ConstantBoundaryConditions):
     values = ((0.0, 0.0),) * ndim
 
     super(HomogeneousBoundaryConditions, self).__init__(types, values, name)
+
+  def tree_flatten(self):
+      # Make time dynamic
+      children = ()
+      aux = (self.types, self.name)
+      return children, aux
+
+  @classmethod
+  def tree_unflatten(cls, aux, children):
+      types, name = aux
+      return cls(types, name)
+
 
 @jax.tree_util.register_pytree_node_class
 class TimeVaryingBoundaryConditions(GeneralBoundaryConditions):
