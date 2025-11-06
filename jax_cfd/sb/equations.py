@@ -121,6 +121,53 @@ def navier_stokes_explicit_terms(
   return explicit_terms_with_same_bcs
 
 
+def navier_stokes_explicit_terms_sb(
+    density: float,
+    viscosity: float,
+    dt: float,
+    grid: grids.Grid,
+    convect: Optional[ConvectFn] = None,
+    diffuse: DiffuseFn = diffusion.diffuse,
+    forcing: Optional[ForcingFn] = None,
+) -> Callable[[GridVariableVector], GridVariableVector]:
+  """Returns a function that performs a time step of Navier Stokes."""
+  del grid  # unused
+
+  if convect is None:
+    def convect(v):  # pylint: disable=function-redefined
+      return tuple(
+          advection.advect_van_leer_using_limiters(u, v, dt) for u in v)
+
+  def diffuse_velocity(v, *args):
+    return tuple(diffuse(u, *args) for u in v)
+  
+  def zero_term(v):
+    return tuple(grids.GridArray(jnp.zeros_like(u), u.offset, u.grid) for u in v)
+
+  convection = _wrap_term_as_vector(convect, name='convection')
+  diffusion_ = _wrap_term_as_vector(diffuse_velocity, name='diffusion')
+  if forcing is not None:
+    forcing = _wrap_term_as_vector(forcing, name='forcing')
+  zero_field = _wrap_term_as_vector(zero_term, name='zero_term')
+
+  @tree_math.wrap
+  @functools.partial(jax.named_call, name='navier_stokes_momentum')
+  def _explicit_terms(v):
+    dv_dt = zero_field(v)
+    dv_dt = convection(v)
+    if viscosity is not None:
+      dv_dt += diffusion_(v, viscosity / density)
+    if forcing is not None:
+      dv_dt += forcing(v) / density
+    return dv_dt
+
+  def explicit_terms_with_same_bcs(v):
+    dv_dt = _explicit_terms(v)
+    return tuple(grids.GridVariable(a, u.bc) for a, u in zip(dv_dt, v))
+
+  return explicit_terms_with_same_bcs
+
+
 # TODO(shoyer): rename this to explicit_diffusion_navier_stokes
 def semi_implicit_navier_stokes(
     density: float,
@@ -170,7 +217,7 @@ def semi_implicit_navier_stokes_sb(
 ) -> Callable[[GridVariableVector], GridVariableVector]:
   """Returns a function that performs a time step of Navier Stokes."""
 
-  explicit_terms = navier_stokes_explicit_terms(
+  explicit_terms = navier_stokes_explicit_terms_sb(
       density=density,
       viscosity=viscosity,
       dt=dt,

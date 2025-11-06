@@ -24,6 +24,7 @@ from jax_cfd.sb import filter_utils
 from jax_cfd.sb import funcutils
 from jax_cfd.sb import grids
 from jax_cfd.sb import pressure
+from jax_cfd.sb import finite_differences
 import numpy as np
 
 # Specifying the full signatures of Callable would get somewhat onerous
@@ -160,3 +161,113 @@ def initial_velocity_field(
     projection = functools.partial(pressure.projection, solve=pressure_solve)
     v = funcutils.repeated(projection, iterations)(v)
   return v
+
+
+def cartesian_to_elliptical(x, y, c):
+  """
+  Obtain corresponding elliptical coordinate values from Cartesian grid.
+
+  Args:
+    x_coord: Cartesian coordinate grid values
+
+  Returns:
+    Corresponding elliptical coordinate grid values
+  """
+
+  B = x**2 + y**2 - c**2
+
+  p = (-B + np.sqrt(B**2 + 4 * c**2 * y**2)) / (2 * c**2)
+  q = (-B - np.sqrt(B**2 + 4 * c**2 * y**2)) / (2 * c**2)
+
+  # compute mu coordinates
+
+  mu = 1/2 * np.log(1 - 2*q + 2*np.sqrt(q**2 - q))
+  
+  # compute nu coordinates
+
+  p = np.clip(p, a_min=None, a_max=1.0)
+  nu_0 = np.arcsin( np.sqrt(p) )
+
+  nu = np.zeros_like(x)
+
+  nu[np.where((x >= 0) & (y >= 0))] = nu_0[np.where((x >= 0) & (y >= 0))]
+  nu[np.where((x < 0) & (y >= 0))] = np.pi - nu_0[np.where((x < 0) & (y >= 0))]
+  nu[np.where((x < 0) & (y < 0))] = np.pi + nu_0[np.where((x < 0) & (y < 0))]
+  nu[np.where((x >= 0) & (y < 0))] = 2 * np.pi - nu_0[np.where((x >= 0) & (y < 0))]
+
+  return (mu, nu)
+
+
+def kida_vortex(a, b, grid, shear_rate):
+  """
+  Computing initial velocity field with a kida vortex on a background shear flow.
+
+  Args:
+    a: semi-major axis
+    b: semi-minor axis
+    grid: grid at which velocity is computed
+    shear_rate: background shear rate
+
+  Returns:
+    Velocity field of such set up.
+  """
+
+  def kida_streamfunction(mu, nu):
+
+    psi = np.zeros_like(mu)
+
+    psi_i = - (S * c**2) / (2 * (chi-1)) * (1/chi * np.cosh(mu)**2 * np.cos(nu)**2 + chi * np.sinh(mu)**2 * np.sin(nu)**2)
+    psi_o = - (S * c**2) / (4 * (chi-1)**2) * (1 + 2 * (mu - mu_0) + 2 * (chi-1)**2 * np.sinh(mu)**2 * np.sin(nu)**2 + (chi-1)/(chi+1) * np.exp(-2 * (mu - mu_0)) * np.cos(2 * nu))
+    
+    inside_core = np.where(mu<=mu_0)
+    outside_core = np.where(mu>mu_0)
+
+    psi[inside_core] = psi_i[inside_core]
+    psi[outside_core] = psi_o[outside_core]
+
+    return psi
+
+  if b>a:
+    raise ValueError('b should be smaller than a.')
+  
+  S = shear_rate
+  c = np.sqrt(a**2-b**2)
+  mu_0 = np.arctanh(b/a)
+  chi = a/b
+
+  offsets = grid.cell_faces
+  bc = boundaries.shearingbox_boundary_conditions(grid.ndim, shear_rate, 0.0, 'psi')
+
+  # compute x velocity
+  x = grid.mesh((0.5,0))[0]
+  y = grid.mesh((0.5,0))[1]
+  mu, nu = cartesian_to_elliptical(x,y,c)
+  psi = kida_streamfunction(mu, nu)
+  psi = grids.GridVariable(grids.GridArray(psi, (0.5,0), grid), bc)
+  ux = finite_differences.central_difference(psi, axis=1)
+
+  # compute y velocity
+  x = grid.mesh((1,0.5))[0]
+  y = grid.mesh((1,0.5))[1]
+  mu, nu = cartesian_to_elliptical(x,y,c)
+  psi = kida_streamfunction(mu, nu)
+  psi = grids.GridVariable(grids.GridArray(psi, (1,0.5), grid), bc)
+  uy = -1 * finite_differences.central_difference(psi, axis=0)
+
+  # rotate back to shearing box Cartesian coordinates
+  ux_rot = -1 * uy.data
+  uy_rot = ux.data
+
+  ux_rot = np.rot90(ux_rot, k=3)
+  uy_rot = np.rot90(uy_rot, k=3)
+
+  v = tuple(
+      [grids.GridVariable(grids.GridArray(ux_rot, offsets[0], grid), boundaries.shearingbox_boundary_conditions(grid.ndim, shear_rate, 0.0, 'vx')),
+      grids.GridVariable(grids.GridArray(uy_rot, offsets[1], grid), boundaries.shearingbox_boundary_conditions(grid.ndim, shear_rate, 0.0, 'vy'))]
+      )
+  
+  return v
+
+
+
+
